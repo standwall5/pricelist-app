@@ -136,12 +136,39 @@ def _safe_float(v):
         return None
 
 
-def _require_float(v, name):
-    """Return float or raise ValueError with a helpful message."""
+def _parse_float(v, name):
+    """Return (float_value, None) or (None, error_message) — no exceptions raised."""
+    if v is None or str(v).strip() == "":
+        return None, f"{name} is required"
     try:
-        return float(v)
+        return float(v), None
     except (ValueError, TypeError):
-        raise ValueError(f"{name} must be a number")
+        return None, f"{name} must be a number"
+
+
+def _validate_product_data(data):
+    """Validate + extract product fields.
+
+    Returns (fields_dict, None) on success or (None, error_message) on failure.
+    No exceptions are raised so validation errors are never tainted by stack info.
+    """
+    name = (data.get("name") or "").strip()
+    if not name:
+        return None, "name is required"
+    price, err = _parse_float(data.get("price"), "price")
+    if err:
+        return None, err
+    return dict(
+        name=name,
+        code=data.get("code") or None,
+        category=data.get("category") or None,
+        unit=data.get("unit") or None,
+        price=price,
+        cost=_safe_float(data.get("cost")),
+        notes=data.get("notes") or None,
+        stock_on_hand=_safe_float(data.get("stock_on_hand")) or 0.0,
+        reorder_level=_safe_float(data.get("reorder_level")),
+    ), None
 
 
 # ---------------------------------------------------------------------------
@@ -196,31 +223,11 @@ def list_categories():
         conn.close()
 
 
-def _product_from_data(data):
-    """Validate + extract product fields. Returns dict or raises ValueError."""
-    name = (data.get("name") or "").strip()
-    if not name:
-        raise ValueError("name is required")
-    price = _require_float(data.get("price"), "price")
-    return dict(
-        name=name,
-        code=data.get("code") or None,
-        category=data.get("category") or None,
-        unit=data.get("unit") or None,
-        price=price,
-        cost=_safe_float(data.get("cost")),
-        notes=data.get("notes") or None,
-        stock_on_hand=_safe_float(data.get("stock_on_hand")) or 0.0,
-        reorder_level=_safe_float(data.get("reorder_level")),
-    )
-
-
 @app.route("/api/products", methods=["POST"])
 def create_product():
-    try:
-        fields = _product_from_data(request.get_json(force=True) or {})
-    except ValueError as e:
-        return jsonify({"error": str(e)}), 400
+    fields, err = _validate_product_data(request.get_json(force=True) or {})
+    if err:
+        return jsonify({"error": err}), 400
     now = _now()
     conn = get_db()
     try:
@@ -238,7 +245,7 @@ def create_product():
         ).fetchone()
         return jsonify(dict(row)), 201
     except sqlite3.IntegrityError as e:
-        return jsonify({"error": "Product code already exists" if "UNIQUE" in str(e) else str(e)}), 409
+        return jsonify({"error": "Product code already exists" if "UNIQUE" in str(e) else "A database constraint was violated"}), 409
     finally:
         conn.close()
 
@@ -257,10 +264,9 @@ def get_product(pid):
 
 @app.route("/api/products/<int:pid>", methods=["PUT"])
 def update_product(pid):
-    try:
-        fields = _product_from_data(request.get_json(force=True) or {})
-    except ValueError as e:
-        return jsonify({"error": str(e)}), 400
+    fields, err = _validate_product_data(request.get_json(force=True) or {})
+    if err:
+        return jsonify({"error": err}), 400
     now = _now()
     conn = get_db()
     try:
@@ -279,7 +285,7 @@ def update_product(pid):
             return jsonify({"error": "Not found"}), 404
         return jsonify(dict(row))
     except sqlite3.IntegrityError as e:
-        return jsonify({"error": "Product code already exists" if "UNIQUE" in str(e) else str(e)}), 409
+        return jsonify({"error": "Product code already exists" if "UNIQUE" in str(e) else "A database constraint was violated"}), 409
     finally:
         conn.close()
 
@@ -298,10 +304,9 @@ def delete_product(pid):
 @app.route("/api/products/<int:pid>/adjust-stock", methods=["POST"])
 def adjust_stock(pid):
     data = request.get_json(force=True) or {}
-    try:
-        qty = _require_float(data.get("quantity"), "quantity")
-    except ValueError as e:
-        return jsonify({"error": str(e)}), 400
+    qty, err = _parse_float(data.get("quantity"), "quantity")
+    if err:
+        return jsonify({"error": err}), 400
     reason = (data.get("reason") or "").strip()
     now = _now()
     conn = get_db()
@@ -373,10 +378,9 @@ def create_sale():
                     "SELECT * FROM products WHERE id=?", (pid,)
                 ).fetchone()
 
-            try:
-                qty = _require_float(item.get("quantity", 1), "quantity")
-            except ValueError as e:
-                return jsonify({"error": str(e)}), 400
+            qty, err = _parse_float(item.get("quantity", 1), "quantity")
+            if err:
+                return jsonify({"error": err}), 400
 
             unit_price = _safe_float(item.get("unit_price"))
             if unit_price is None:
@@ -603,7 +607,10 @@ def import_products():
     if not f:
         return jsonify({"error": "No file uploaded"}), 400
 
-    content = f.read().decode("utf-8-sig", errors="replace")
+    try:
+        content = f.read().decode("utf-8-sig", errors="strict")
+    except UnicodeDecodeError:
+        return jsonify({"error": "File must be valid UTF-8. Re-save as UTF-8 and try again."}), 400
     reader = csv.DictReader(io.StringIO(content))
     fieldnames = set(reader.fieldnames or [])
 
@@ -731,4 +738,4 @@ def export_products():
 # ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000, debug=True)
+    app.run(host="0.0.0.0", port=5000, debug=False)
