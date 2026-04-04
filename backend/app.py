@@ -245,7 +245,7 @@ def create_product():
         ).fetchone()
         return jsonify(dict(row)), 201
     except sqlite3.IntegrityError as e:
-        return jsonify({"error": "Product code already exists" if "UNIQUE" in str(e) else "A database constraint was violated"}), 409
+        return jsonify({"error": "Product code already exists" if "UNIQUE" in str(e) else "A database error occurred. Check that the product code is unique."}), 409
     finally:
         conn.close()
 
@@ -285,7 +285,7 @@ def update_product(pid):
             return jsonify({"error": "Not found"}), 404
         return jsonify(dict(row))
     except sqlite3.IntegrityError as e:
-        return jsonify({"error": "Product code already exists" if "UNIQUE" in str(e) else "A database constraint was violated"}), 409
+        return jsonify({"error": "Product code already exists" if "UNIQUE" in str(e) else "A database error occurred. Check that the product code is unique."}), 409
     finally:
         conn.close()
 
@@ -610,7 +610,7 @@ def import_products():
     try:
         content = f.read().decode("utf-8-sig", errors="strict")
     except UnicodeDecodeError:
-        return jsonify({"error": "File must be valid UTF-8. Re-save as UTF-8 and try again."}), 400
+        return jsonify({"error": "File must be UTF-8 encoded. In Excel: Save As → CSV UTF-8. In Notepad: Save As → Encoding: UTF-8."}), 400
     reader = csv.DictReader(io.StringIO(content))
     fieldnames = set(reader.fieldnames or [])
 

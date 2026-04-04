@@ -644,7 +644,12 @@ function addToCart(productId) {
   const fetchAndAdd = async () => {
     let product = p;
     if (!p.name) {
-      try { product = await api('GET', `/api/products/${productId}`); } catch { return; }
+      try {
+        product = await api('GET', `/api/products/${productId}`);
+      } catch (e) {
+        toast('Could not load product: ' + e.message, 'error');
+        return;
+      }
     }
     const existing = cart.find(i => i.product.id === product.id);
     if (existing) {
@@ -671,8 +676,20 @@ function changeQty(idx, delta) {
 
 function setQty(idx, val) {
   const v = parseFloat(val);
-  if (!isNaN(v) && v > 0) cart[idx].qty = v;
+  if (!isNaN(v) && v >= 0.1) cart[idx].qty = v;
   renderCart();
+}
+
+/** Compute cart totals — single source of truth used by renderCart and openSaleConfirm. */
+function cartTotals() {
+  let totalRev = 0, totalProfit = 0;
+  for (const item of cart) {
+    const cost = item.product.cost || 0;
+    totalRev    += item.product.price * item.qty;
+    totalProfit += (item.product.price - cost) * item.qty;
+  }
+  const margin = totalRev > 0 ? (totalProfit / totalRev * 100).toFixed(1) : '0.0';
+  return { totalRev, totalProfit, margin };
 }
 
 function renderCart() {
@@ -699,14 +716,11 @@ function renderCart() {
   }
 
   emptyEl.style.display = 'none';
-  let totalRev = 0, totalProfit = 0;
 
   itemsEl.innerHTML = cart.map((item, idx) => {
-    const lt = item.product.price * item.qty;
     const cost = item.product.cost || 0;
+    const lt = item.product.price * item.qty;
     const lp = (item.product.price - cost) * item.qty;
-    totalRev += lt;
-    totalProfit += lp;
     return `
       <div class="cart-item">
         <div>
@@ -715,7 +729,7 @@ function renderCart() {
         </div>
         <div class="qty-control">
           <button class="qty-btn" onclick="changeQty(${idx},-1)">−</button>
-          <input class="qty-input" type="number" min="0.1" step="any" value="${item.qty}" onchange="setQty(${idx}, this.value)">
+          <input class="qty-input" type="number" min="0.1" step="any" value="${item.qty}" aria-label="Quantity for ${esc(item.product.name)}" onchange="setQty(${idx}, this.value)">
           <button class="qty-btn" onclick="changeQty(${idx},1)">＋</button>
         </div>
         <button class="btn btn-danger btn-sm" onclick="removeFromCart(${idx})">✕</button>
@@ -723,8 +737,8 @@ function renderCart() {
     `;
   }).join('');
 
+  const { totalRev, totalProfit, margin } = cartTotals();
   totalsEl.style.display = 'block';
-  const margin = totalRev > 0 ? (totalProfit / totalRev * 100).toFixed(1) : '0.0';
   totalsEl.innerHTML = `
     <div class="total-row"><span>Revenue</span><span>${fmt(totalRev)}</span></div>
     <div class="total-row big"><span>Profit</span><span class="profit ${totalProfit >= 0 ? 'profit-positive' : 'profit-negative'}">${fmt(totalProfit)} (${margin}%)</span></div>
@@ -734,12 +748,9 @@ function renderCart() {
 }
 
 function openSaleConfirm() {
-  let totalRev = 0, totalProfit = 0;
+  const { totalRev, totalProfit } = cartTotals();
   const rows = cart.map(item => {
     const lt = item.product.price * item.qty;
-    const cost = item.product.cost || 0;
-    const lp = (item.product.price - cost) * item.qty;
-    totalRev += lt; totalProfit += lp;
     return `<div class="sale-item-row"><span>${esc(item.product.name)} × ${item.qty}</span><span>${fmt(lt)}</span></div>`;
   }).join('');
 
